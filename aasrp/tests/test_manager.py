@@ -10,6 +10,11 @@ from unittest.mock import MagicMock, patch
 import requests
 
 # AA SRP
+from aasrp.exceptions import (
+    KillmailNotFoundError,
+    KillmailPermanentError,
+    KillmailTemporaryError,
+)
 from aasrp.managers import SettingManager, SettingQuerySet, SrpRequestManager
 from aasrp.tests import BaseTestCase
 
@@ -52,7 +57,7 @@ class TestSrpRequestManagerGetZkillboardData(BaseTestCase):
         mock_response.raise_for_status.return_value = None
 
         with patch("requests.get", return_value=mock_response):
-            with self.assertRaises(ValueError) as cm:
+            with self.assertRaises(KillmailNotFoundError) as cm:
                 SrpRequestManager.get_zkillboard_data("12345")
 
             self.assertIn(
@@ -73,7 +78,7 @@ class TestSrpRequestManagerGetZkillboardData(BaseTestCase):
         mock_response.raise_for_status.return_value = None
 
         with patch("requests.get", return_value=mock_response):
-            with self.assertRaises(ValueError) as cm:
+            with self.assertRaises(KillmailTemporaryError) as cm:
                 SrpRequestManager.get_zkillboard_data("12345")
 
             self.assertIn(
@@ -99,7 +104,7 @@ class TestSrpRequestManagerGetZkillboardData(BaseTestCase):
 
         mock_requests_get.side_effect = requests.HTTPError("HTTP error occurred")
 
-        with self.assertRaises(ValueError) as context:
+        with self.assertRaises(KillmailTemporaryError) as context:
             SrpRequestManager.get_zkillboard_data("12345")
 
         self.assertIn("Please try again in an hour", str(context.exception))
@@ -126,7 +131,7 @@ class TestSrpRequestManagerGetZkillboardData(BaseTestCase):
 
         mock_requests_get.side_effect = requests.Timeout("Request timed out")
 
-        with self.assertRaises(ValueError) as context:
+        with self.assertRaises(KillmailTemporaryError) as context:
             SrpRequestManager.get_zkillboard_data("12345")
 
         self.assertIn("Please try again in an hour", str(context.exception))
@@ -148,11 +153,43 @@ class TestSrpRequestManagerGetZkillboardData(BaseTestCase):
 
         mock_requests_get.side_effect = requests.ConnectionError("Connection reset")
 
-        with self.assertRaises(ValueError) as context:
+        with self.assertRaises(KillmailTemporaryError) as context:
             SrpRequestManager.get_zkillboard_data("12345")
 
         self.assertIn("Please try again in an hour", str(context.exception))
         self.assertNotIn("Connection reset", str(context.exception))
+
+    @patch("aasrp.managers.requests.get")
+    def test_http_status_classification(self, mock_requests_get):
+        """
+        Test that 408, 429 and 5xx responses are temporary and other 4xx responses are permanent.
+
+        :param mock_requests_get:
+        :type mock_requests_get:
+        :return:
+        :rtype:
+        """
+
+        expected = {
+            400: KillmailPermanentError,
+            403: KillmailPermanentError,
+            404: KillmailPermanentError,
+            408: KillmailTemporaryError,
+            429: KillmailTemporaryError,
+            500: KillmailTemporaryError,
+            503: KillmailTemporaryError,
+        }
+
+        for status_code, error_class in expected.items():
+            with self.subTest(status_code=status_code):
+                response = requests.Response()
+                response.status_code = status_code
+                mock_requests_get.return_value = response
+
+                with self.assertRaises(error_class) as context:
+                    SrpRequestManager.get_zkillboard_data("12345")
+
+                self.assertIn("Please try again in an hour", str(context.exception))
 
     @patch("aasrp.managers.requests.get")
     def test_get_zkillboard_data_raises_valueerror_on_non_json_response(self, mock_get):
@@ -172,7 +209,7 @@ class TestSrpRequestManagerGetZkillboardData(BaseTestCase):
         )
         mock_get.return_value = response_mock
 
-        with self.assertRaises(ValueError):
+        with self.assertRaises(KillmailTemporaryError):
             SrpRequestManager.get_zkillboard_data(kill_id="99999")
 
     @patch("aasrp.managers.requests.get")
@@ -191,7 +228,7 @@ class TestSrpRequestManagerGetZkillboardData(BaseTestCase):
         response_mock.json.return_value = [12345]
         mock_get.return_value = response_mock
 
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaises(KillmailTemporaryError) as cm:
             SrpRequestManager.get_zkillboard_data(kill_id="12345")
 
         self.assertEqual(str(cm.exception), "Invalid Kill ID or Hash.")
@@ -397,7 +434,7 @@ class TestSrpRequestManagerKetKillData(BaseTestCase):
         mock_get_zkillboard_data.return_value = {"zkb": {"hash": "test_hash"}}
         mock_esi_result.return_value = None
 
-        with self.assertRaises(ValueError) as context:
+        with self.assertRaises(KillmailTemporaryError) as context:
             SrpRequestManager.get_kill_data("12345", "totalValue")
 
         self.assertIn(
